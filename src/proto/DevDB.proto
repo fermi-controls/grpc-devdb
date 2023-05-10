@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package devdb;
+
+service DevDB {
+    // Clients can ask for device information (obtained from the
+    // device database.) The function is passed an array of device
+    // names. The function returns an array of results. The order of
+    // the results is the same as the request.
+
+    rpc getDeviceInfo(DeviceList) returns (DeviceInfoReply) {}
+
+    // This function allows clients to monitor device info changes.
+    // The client passes an array of device names. The function
+    // returns a stream which will report all changes to the device's
+    // information until the stream is canceled. The client will
+    // receive a complete set of device information before monitoring
+    // changes so there's no need to do an initial call to
+    // `getDeviceInfo()`.
+
+    // rpc monitorDeviceInfo(DeviceList) returns (stream InfoEntry) {}
+}
+
+// Holds an array of device names (strings).
+
+message DeviceList {
+    repeated string device = 1;
+}
+
+message Property {
+    string primary_units = 1;
+    string common_units = 2;
+}
+
+// Holds information about a device.
+
+message DeviceInfo {
+    uint32 index = 1;
+    string description = 2;
+    Property reading = 3;
+    Property setting = 4;
+}
+
+// One entry in `DeviceInfoReply`s array.
+
+message InfoEntry {
+    string name = 1;
+    oneof result {
+	DeviceInfo device = 2;
+	string errMsg = 3;
+    }
+}
+
+// Holds an array
+
+message DeviceInfoReply {
+    repeated InfoEntry set = 1;
+}
