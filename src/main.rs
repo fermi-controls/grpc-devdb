@@ -2,9 +2,10 @@ use devdb::{
     dev_db_server::{DevDb, DevDbServer},
     info_entry, DeviceInfo, DeviceInfoReply, DeviceList, InfoEntry, Property,
 };
-use futures::future;
+use futures::{future, Stream, StreamExt};
 use hyper::{service::make_service_fn, Server};
-use std::convert::Infallible;
+use sqlx::postgres::{PgPool, PgPoolOptions};
+use std::{convert::Infallible, pin::Pin};
 use tonic::{Request, Response, Status};
 use tower::Service;
 use tracing::{error, info, Level};
@@ -15,8 +16,33 @@ pub mod devdb {
 
 // Create an empty type to associate it with the gRPC handlers.
 
-#[derive(Default)]
-pub struct DevDB {}
+pub struct DevDB {
+    pub pool: PgPool,
+}
+
+#[derive(sqlx::FromRow)]
+struct RowInfo {
+    di: i32,
+    pi: i32,
+    descr: String,
+    p_units: String,
+    c_units: String,
+}
+
+impl DevDB {
+    const QUERY: &str = r#"
+SELECT di,
+       pi,
+       CAST (D.description AS TEXT) AS descr,
+       CAST (S.primary_text AS TEXT) AS p_units,
+       CAST (S.common_text AS TEXT) AS c_units
+  FROM accdb.device D
+    JOIN accdb.property P USING(di)
+    JOIN accdb.device_scaling S USING(di, pi)
+  WHERE D.name = $1 and pi in (12, 13)"#;
+}
+
+type Fetch<'a, T> = Pin<Box<dyn Stream<Item = Result<T, sqlx::Error>> + Send + 'a>>;
 
 #[tonic::async_trait]
 impl DevDb for DevDB {
@@ -26,29 +52,63 @@ impl DevDb for DevDB {
     ) -> Result<Response<DeviceInfoReply>, Status> {
         info!("request for {:?}", request.get_ref().device);
 
-        Ok(Response::new(DeviceInfoReply {
-            set: request
-                .get_ref()
-                .device
-                .iter()
-                .map(|dev| InfoEntry {
-                    name: dev.clone(),
-                    result: Some(info_entry::Result::Device(DeviceInfo {
-                        index: 0,
-                        reading: Some(Property {
-                            primary_units: "V".into(),
-                            common_units: "mm".into(),
-                        }),
-                        setting: Some(Property {
-                            primary_units: "V".into(),
-                            common_units: "mm".into(),
-                        }),
-                        description: "description".into(),
-                    })),
-                })
-                // Pull all entries from the iterator and store in a vector.
-                .collect::<Vec<InfoEntry>>(),
-        }))
+        let mut result = vec![];
+
+        // Loop through each device.
+
+        'outer: for item in &request.get_ref().device {
+            // Build and prep the SQL query for this iteration.
+
+            let mut sql_cmd: Fetch<RowInfo> =
+                sqlx::query_as(DevDB::QUERY).bind(item).fetch(&self.pool);
+
+            // Local copies of the device info that we're accumulating.
+
+            let mut index: u32 = 0;
+            let mut description: String = "".into();
+            let mut r_prop: Option<Property> = None;
+            let mut s_prop: Option<Property> = None;
+
+            // Loop through the database results.
+
+            while let Some(row) = sql_cmd.next().await {
+                if let Ok(row) = row {
+                    index = row.di as u32;
+                    description = row.descr.clone();
+
+                    // Build a property type.
+
+                    let prop = Property {
+                        primary_units: Some(row.p_units.clone()),
+                        common_units: Some(row.c_units.clone()),
+                    };
+
+                    // Now fill in the appropriate propery. 12 is for
+                    // readings and 13 is for settings. Our query only
+                    // returns these two properties.
+
+                    if row.pi == 12 {
+                        r_prop = Some(prop)
+                    } else {
+                        s_prop = Some(prop)
+                    }
+                } else {
+                    break 'outer;
+                }
+            }
+
+            result.push(InfoEntry {
+                name: item.into(),
+                result: Some(info_entry::Result::Device(DeviceInfo {
+                    index,
+                    description,
+                    reading: r_prop,
+                    setting: s_prop,
+                })),
+            });
+        }
+
+        Ok(Response::new(DeviceInfoReply { set: result }))
     }
 }
 
@@ -63,17 +123,25 @@ async fn main() {
     tracing::subscriber::set_global_default(subscriber)
         .expect("unable to initialize trace facility");
 
-    let grpc_server = DevDbServer::new(DevDB::default());
+    let pool_fut = PgPoolOptions::new()
+        .max_connections(5)
+        .connect("postgres://guest:GUEST1@dbsrv.fnal.gov/adbs");
 
-    let http_server = Server::bind(&addr).serve(make_service_fn(move |_| {
-        let mut grpc_server = grpc_server.clone();
+    match pool_fut.await {
+        Ok(pool) => {
+            let grpc_server = DevDbServer::new(DevDB { pool });
+            let http_server = Server::bind(&addr).serve(make_service_fn(move |_| {
+                let mut grpc_server = grpc_server.clone();
 
-        future::ok::<_, Infallible>(tower::service_fn(
-            move |req: hyper::Request<hyper::Body>| grpc_server.call(req),
-        ))
-    }));
+                future::ok::<_, Infallible>(tower::service_fn(
+                    move |req: hyper::Request<hyper::Body>| grpc_server.call(req),
+                ))
+            }));
 
-    if let Err(e) = http_server.await {
-        error!("httpd error: {}", e);
+            if let Err(e) = http_server.await {
+                error!("httpd error: {}", e);
+            }
+        }
+        Err(e) => error!("{}", e),
     }
 }

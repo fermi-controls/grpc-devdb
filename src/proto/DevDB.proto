@@ -28,8 +28,8 @@ message DeviceList {
 }
 
 message Property {
-    string primary_units = 1;
-    string common_units = 2;
+    optional string primary_units = 1;
+    optional string common_units = 2;
 }
 
 // Holds information about a device.
@@ -37,8 +37,8 @@ message Property {
 message DeviceInfo {
     uint32 index = 1;
     string description = 2;
-    Property reading = 3;
-    Property setting = 4;
+    optional Property reading = 3;
+    optional Property setting = 4;
 }
 
 // One entry in `DeviceInfoReply`s array.
