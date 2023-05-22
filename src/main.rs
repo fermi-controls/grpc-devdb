@@ -1,17 +1,19 @@
-use devdb::{
+use proto::{
     dev_db_server::{DevDb, DevDbServer},
     info_entry, DeviceInfo, DeviceInfoReply, DeviceList, InfoEntry, Property,
 };
 use futures::{future, Stream, StreamExt};
-use hyper::{service::make_service_fn, Server};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use std::{convert::Infallible, pin::Pin};
-use tonic::{Request, Response, Status};
+use tonic::{transport::Server, Request, Response, Status};
 use tower::Service;
 use tracing::{error, info, warn, Level};
 
-pub mod devdb {
+pub mod proto {
     tonic::include_proto!("devdb");
+
+    pub(crate) const FILE_DESCRIPTOR_SET: &[u8] =
+        tonic::include_file_descriptor_set!("devdb_descriptor");
 }
 
 // Create an empty type to associate it with the gRPC handlers.
@@ -143,25 +145,21 @@ async fn main() {
 
     match pool_fut.await {
         Ok(pool) => {
+            let refl_service = tonic_reflection::server::Builder::configure()
+                .register_encoded_file_descriptor_set(proto::FILE_DESCRIPTOR_SET)
+                .build()
+                .unwrap();
+
             // Move the connection pool into the state of our gRPC
             // service.
 
             let grpc_server = DevDbServer::new(DevDB { pool });
 
-            // Create the HTTP server which forwards connections to
-            // our gRPC service.
-
-            let http_server = Server::bind(&addr).serve(make_service_fn(move |_| {
-                let mut grpc_server = grpc_server.clone();
-
-                future::ok::<_, Infallible>(tower::service_fn(
-                    move |req: hyper::Request<hyper::Body>| grpc_server.call(req),
-                ))
-            }));
-
-            if let Err(e) = http_server.await {
-                error!("httpd error: {}", e);
-            }
+            let _ = Server::builder()
+                .add_service(refl_service)
+                .add_service(grpc_server)
+                .serve(addr)
+                .await;
         }
         Err(e) => error!("{}", e),
     }
