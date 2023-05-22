@@ -8,7 +8,7 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 use std::{convert::Infallible, pin::Pin};
 use tonic::{Request, Response, Status};
 use tower::Service;
-use tracing::{error, info, Level};
+use tracing::{error, info, warn, Level};
 
 pub mod devdb {
     tonic::include_proto!("devdb");
@@ -20,7 +20,7 @@ pub struct DevDB {
     pub pool: PgPool,
 }
 
-#[derive(sqlx::FromRow)]
+#[derive(sqlx::FromRow, Debug)]
 struct RowInfo {
     di: i32,
     pi: i32,
@@ -72,32 +72,36 @@ impl DevDb for DevDB {
             // Loop through the database results.
 
             while let Some(row) = sql_cmd.next().await {
-                if let Ok(row) = row {
-                    index = row.di as u32;
-                    description = row.descr.clone();
+                match row {
+                    Ok(row) => {
+                        index = row.di as u32;
+                        description = row.descr.clone();
 
-                    // Build a property type.
+                        // Build a property type.
 
-                    let prop = Property {
-                        primary_units: Some(row.p_units.clone()),
-                        common_units: Some(row.c_units.clone()),
-                    };
+                        let prop = Property {
+                            primary_units: Some(row.p_units.clone()),
+                            common_units: Some(row.c_units.clone()),
+                        };
 
-                    // Now fill in the appropriate propery. 12 is for
-                    // readings and 13 is for settings. Our query only
-                    // returns these two properties.
+                        // Now fill in the appropriate property. 12 is
+                        // for readings and 13 is for settings. Our
+                        // query only returns these two properties.
 
-                    if row.pi == 12 {
-                        r_prop = Some(prop)
-                    } else {
-                        s_prop = Some(prop)
+                        if row.pi == 12 {
+                            r_prop = Some(prop)
+                        } else {
+                            s_prop = Some(prop)
+                        }
                     }
-                } else {
-                    break 'outer;
+                    Err(e) => {
+                        warn!("couldn't decode row : {}", &e);
+                        break 'outer;
+                    }
                 }
             }
 
-            result.push(InfoEntry {
+            let tmp = InfoEntry {
                 name: item.into(),
                 result: Some(info_entry::Result::Device(DeviceInfo {
                     index,
@@ -105,7 +109,9 @@ impl DevDb for DevDB {
                     reading: r_prop,
                     setting: s_prop,
                 })),
-            });
+            };
+
+            result.push(tmp);
         }
 
         Ok(Response::new(DeviceInfoReply { set: result }))
@@ -114,7 +120,8 @@ impl DevDb for DevDB {
 
 #[tokio::main]
 async fn main() {
-    let addr = "0.0.0.0:50051".parse().unwrap();
+    // Set-up the logging system.
+
     let subscriber = tracing_subscriber::fmt()
         .with_max_level(Level::INFO)
         .with_target(false)
@@ -123,13 +130,27 @@ async fn main() {
     tracing::subscriber::set_global_default(subscriber)
         .expect("unable to initialize trace facility");
 
+    // Define the address for the gRPC service to use.
+
+    let addr = "0.0.0.0:6802".parse().unwrap();
+
+    // Create a pool of connections to PostgreSQL. We start with a
+    // pool of 5 connections.
+
     let pool_fut = PgPoolOptions::new()
         .max_connections(5)
         .connect("postgres://guest:GUEST1@dbsrv.fnal.gov/adbs");
 
     match pool_fut.await {
         Ok(pool) => {
+            // Move the connection pool into the state of our gRPC
+            // service.
+
             let grpc_server = DevDbServer::new(DevDB { pool });
+
+            // Create the HTTP server which forwards connections to
+            // our gRPC service.
+
             let http_server = Server::bind(&addr).serve(make_service_fn(move |_| {
                 let mut grpc_server = grpc_server.clone();
 
