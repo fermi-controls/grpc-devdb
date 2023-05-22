@@ -1,6 +1,6 @@
 # grpc-devdb
 
-This service provides information related to device used in Ferilab's control system. The service uses gRPC for its protocol.
+This service provides information related to device used in Fermilab's control system. The service uses gRPC for its protocol.
 
 ## Building
 
