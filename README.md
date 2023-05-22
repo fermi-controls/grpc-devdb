@@ -10,4 +10,4 @@ $ cd grpc-devdb
 $ cargo build --release
 ```
 
-The executable will be found at `target/release/grpc-devdb`.
+The executable will be found at `target/release/devdb`.
