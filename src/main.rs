@@ -2,11 +2,10 @@ use proto::{
     dev_db_server::{DevDb, DevDbServer},
     info_entry, DeviceInfo, DeviceInfoReply, DeviceList, InfoEntry, Property,
 };
-use futures::{future, Stream, StreamExt};
+use futures::{Stream, StreamExt};
 use sqlx::postgres::{PgPool, PgPoolOptions};
-use std::{convert::Infallible, pin::Pin};
+use std::pin::Pin;
 use tonic::{transport::Server, Request, Response, Status};
-use tower::Service;
 use tracing::{error, info, warn, Level};
 
 pub mod proto {
