@@ -1,12 +1,15 @@
+use futures::{Stream, StreamExt};
 use proto::{
     dev_db_server::{DevDb, DevDbServer},
     info_entry, DeviceInfo, DeviceInfoReply, DeviceList, InfoEntry, Property,
 };
-use futures::{Stream, StreamExt};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use std::pin::Pin;
 use tonic::{transport::Server, Request, Response, Status};
-use tracing::{error, info, warn, Level};
+use tracing::{error, info, info_span, warn, Level};
+use tracing_futures::Instrument;
+
+// Place all the Protobuf stuff in a `proto` module.
 
 pub mod proto {
     tonic::include_proto!("devdb");
@@ -56,71 +59,86 @@ impl DevDb for DevDB {
         &self,
         request: Request<DeviceList>,
     ) -> Result<Response<DeviceInfoReply>, Status> {
-        info!("request for {:?}", request.get_ref().device);
+        let client = request
+            .remote_addr()
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "unknown".into());
 
-        let mut result = vec![];
+        async {
+            info!("devices {:?}", request.get_ref().device);
 
-        // Loop through each device.
+            let mut result = vec![];
 
-        'outer: for item in &request.get_ref().device {
-            // Build and prep the SQL query for this iteration.
+            // Loop through each device.
 
-            let mut sql_cmd: Fetch<RowInfo> =
-                sqlx::query_as(DevDB::QUERY).bind(item).fetch(&self.pool);
+            'outer: for item in &request.get_ref().device {
+                // Build and prep the SQL query for this iteration.
 
-            // Local copies of the device info that we're accumulating.
+                let mut sql_cmd: Fetch<RowInfo> =
+                    sqlx::query_as(DevDB::QUERY).bind(item).fetch(&self.pool);
 
-            let mut index: u32 = 0;
-            let mut description: String = "".into();
-            let mut r_prop: Option<Property> = None;
-            let mut s_prop: Option<Property> = None;
+                // Local copies of the device info that we're accumulating.
 
-            // Loop through the database results.
+                let mut index: u32 = 0;
+                let mut description: String = "".into();
+                let mut r_prop: Option<Property> = None;
+                let mut s_prop: Option<Property> = None;
 
-            while let Some(row) = sql_cmd.next().await {
-                match row {
-                    Ok(row) => {
-                        index = row.di as u32;
-                        description = row.descr.clone();
+                // Loop through the database results.
 
-                        // Build a property type.
+                while let Some(row) = sql_cmd.next().await {
+                    match row {
+                        Ok(row) => {
+                            index = row.di as u32;
+                            description = row.descr.clone();
 
-                        let prop = Property {
-                            primary_units: Some(row.p_units.clone()),
-                            common_units: Some(row.c_units.clone()),
-                        };
+                            // Build a property type.
 
-                        // Now fill in the appropriate property. 12 is
-                        // for readings and 13 is for settings. Our
-                        // query only returns these two properties.
+                            let prop = Property {
+                                primary_units: Some(row.p_units.clone()),
+                                common_units: Some(row.c_units.clone()),
+                            };
 
-                        if row.pi == 12 {
-                            r_prop = Some(prop)
-                        } else {
-                            s_prop = Some(prop)
+                            // Now fill in the appropriate property. 12 is
+                            // for readings and 13 is for settings. Our
+                            // query only returns these two properties.
+
+                            if row.pi == 12 {
+                                r_prop = Some(prop)
+                            } else {
+                                s_prop = Some(prop)
+                            }
+                        }
+                        Err(e) => {
+                            warn!("couldn't decode row for {} : {}", &item, &e);
+                            let tmp = InfoEntry {
+                                name: item.into(),
+                                result: Some(info_entry::Result::ErrMsg(format!("{}", e))),
+                            };
+
+                            result.push(tmp);
+                            break 'outer;
                         }
                     }
-                    Err(e) => {
-                        warn!("couldn't decode row : {}", &e);
-                        break 'outer;
-                    }
                 }
+
+                let tmp = InfoEntry {
+                    name: item.into(),
+                    result: Some(info_entry::Result::Device(DeviceInfo {
+                        index,
+                        description,
+                        reading: r_prop,
+                        setting: s_prop,
+                    })),
+                };
+
+                result.push(tmp);
             }
 
-            let tmp = InfoEntry {
-                name: item.into(),
-                result: Some(info_entry::Result::Device(DeviceInfo {
-                    index,
-                    description,
-                    reading: r_prop,
-                    setting: s_prop,
-                })),
-            };
-
-            result.push(tmp);
+            Ok(Response::new(DeviceInfoReply { set: result }))
         }
-
-        Ok(Response::new(DeviceInfoReply { set: result }))
+        .instrument(info_span!("dev-info", client))
+        .await
     }
 }
 
