@@ -15,11 +15,16 @@ pub mod proto {
         tonic::include_file_descriptor_set!("devdb_descriptor");
 }
 
-// Create an empty type to associate it with the gRPC handlers.
+// The gRPC hander for this API needs to access the database. So the
+// global state used by the service will hold a pool of connections.
 
 pub struct DevDB {
     pub pool: PgPool,
 }
+
+// This defines the row (with types) that we expect from our
+// query. This structure should be kept in sync with the actual query
+// (otherwise we'll get runtime errors.)
 
 #[derive(sqlx::FromRow, Debug)]
 struct RowInfo {
