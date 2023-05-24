@@ -142,10 +142,7 @@ impl DevDb for DevDB {
     }
 }
 
-#[tokio::main]
-async fn main() {
-    // Set-up the logging system.
-
+fn setup_logging() {
     let subscriber = tracing_subscriber::fmt()
         .with_max_level(Level::INFO)
         .with_target(false)
@@ -153,6 +150,11 @@ async fn main() {
 
     tracing::subscriber::set_global_default(subscriber)
         .expect("unable to initialize trace facility");
+}
+
+#[tokio::main]
+async fn main() {
+    setup_logging();
 
     // Define the address for the gRPC service to use.
 
