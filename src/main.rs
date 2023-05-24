@@ -11,7 +11,7 @@ use tracing_futures::Instrument;
 
 // Place all the Protobuf stuff in a `proto` module.
 
-pub mod proto {
+mod proto {
     tonic::include_proto!("devdb");
 
     pub(crate) const FILE_DESCRIPTOR_SET: &[u8] =
@@ -21,8 +21,8 @@ pub mod proto {
 // The gRPC hander for this API needs to access the database. So the
 // global state used by the service will hold a pool of connections.
 
-pub struct DevDB {
-    pub pool: PgPool,
+struct DevDB {
+    pool: PgPool,
 }
 
 // This defines the row (with types) that we expect from our
