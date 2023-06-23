@@ -32,6 +32,10 @@ message Property {
     optional string common_units = 2;
 }
 
+message DigitalControl {
+    map<string, int32> cmds = 5;
+}
+
 // Holds information about a device.
 
 message DeviceInfo {
@@ -39,6 +43,7 @@ message DeviceInfo {
     string description = 2;
     optional Property reading = 3;
     optional Property setting = 4;
+    optional DigitalControl dig_control = 5;
 }
 
 // One entry in `DeviceInfoReply`s array.

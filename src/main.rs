@@ -129,6 +129,7 @@ impl DevDb for DevDB {
                         description,
                         reading: r_prop,
                         setting: s_prop,
+                        dig_control: None,
                     })),
                 };
 
