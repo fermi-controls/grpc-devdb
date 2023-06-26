@@ -32,8 +32,14 @@ message Property {
     optional string common_units = 2;
 }
 
+message DigitalControlItem {
+    uint32 value = 1;
+    string short_name = 2;
+    string long_name = 3;
+}
+
 message DigitalControl {
-    map<string, int32> cmds = 5;
+    repeated DigitalControlItem cmds = 1;
 }
 
 // Holds information about a device.
